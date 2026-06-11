@@ -1,0 +1,11 @@
+openai
+pymongo
+python-dotenv
+requests
+pydantic
+fastapi
+uvicorn
+langgraph
+langchain-core
+langchain-groq
+groq
