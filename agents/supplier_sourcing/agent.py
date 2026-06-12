@@ -209,7 +209,8 @@ class CompleteSuppliersManagerAgent:
             if s_email in category_replies:
                 reply_email_text = category_replies[s_email]
                 
-                UI.print_email("INBOUND", s_name, "RE: RFQ Response", reply_email_text)
+                print(f"\n  📨 {UI.BOLD}INBOUND EMAIL - {s_name}{UI.ENDC}")
+                print(f"  └─ {UI.BOLD}Status:{UI.ENDC} Processing response via LLM (content hidden)...")
                 
                 extract_prompt = f"""
                 Extract the total quoted amount (as a float) and the estimated delivery date (as a YYYY-MM-DD string) from this email reply.
@@ -334,19 +335,7 @@ class CompleteSuppliersManagerAgent:
             if not remaining_needs:
                 combo_names = " & ".join([q["supplier_name"] for q in selected_quotes])
                 print(f"  {UI.BLUE}⚙️ Found a valid combination: {combo_names}{UI.ENDC}")
-                
-                # Send confirmation emails
-                for q in selected_quotes:
-                    taken_str = "\n".join([f"- {name}: {qty} units" for name, qty in q["confirmed_taken_items"].items()])
-                    prompt = f"We are considering you for a partial order. Can you confirm you can supply EXACTLY these items and quantities?\n{taken_str}\nPlease reply to confirm."
-                    subject = f"RFQ: Partial Order Confirmation ({q['supplier_id']})"
-                    
-                    email_text = self.call_groq(prompt)
-                    self.email_helper.send_email(q["supplier_email"], subject, email_text)
-                    print(f"  📨 {UI.BOLD}SENT COMBINATION CONFIRMATION EMAIL - {q['supplier_name']}{UI.ENDC}", flush=True)
-                
-                print(f"  ⏳ Waiting for combination confirmations from {combo_names}...")
-                print("  (For simulation purposes, assuming auto-confirmed)")
+                print(f"  ⚙️ Grouping into a combo quote and passing to Agent 3 for compliance and final acceptance...")
                 
                 combo_quote = {
                     "supplier_id": "COMBO_" + "_".join([q["supplier_id"] for q in selected_quotes]),

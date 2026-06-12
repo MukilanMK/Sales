@@ -80,7 +80,7 @@ def run_pipeline():
         "min_return_window_days": days,
         "acceptable_liability_parties": parties
     }
-    agent3 = ComplianceAndFulfillmentAgent(user_policy=user_policy)
+    agent3 = ComplianceAndFulfillmentAgent(user_policy=user_policy, sender_details=sender_details)
 
     while categorized_needs:
         print(f"\n{UI.HEADER}{UI.BOLD}=== CATEGORY MENU ==={UI.ENDC}")

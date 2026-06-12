@@ -3,7 +3,7 @@ from shared.database import sales_collection
 
 def fetch_inventory_from_api():
     """Fetch today's inventory sales data from API."""
-    response = requests.get("http://127.0.0.1:5000/inventory")
+    response = requests.get("http://127.0.0.1:8000/inventory")
     response.raise_for_status()
     raw = response.json()
 

@@ -55,10 +55,10 @@ class UI:
         print(f"  ✅ {UI.GREEN}{msg}{UI.ENDC}")
 
     @staticmethod
-    def print_email(direction: str, name: str, body: str):
+    def print_email(direction: str, name: str, subject: str, body: str):
         color = UI.WARNING if direction == "OUTBOUND TO" else UI.BLUE
         print(f"\n  📨 {UI.BOLD}{direction} {name.upper()}{UI.ENDC}")
-        print(f"  ├─ {UI.BOLD}Subject:{UI.ENDC} Procurement Compliance Terms Alignment Validation")
+        print(f"  ├─ {UI.BOLD}Subject:{UI.ENDC} {subject}")
         print(f"  └─ {UI.BOLD}Body Content:{UI.ENDC}\n  \"\"\"\n  {body.strip()}\n  \"\"\"")
 
 # ---------------------------------------------------------------------
@@ -77,13 +77,15 @@ class DeliveryTelemetryInput(BaseModel):
 # AGENT 3 OPERATIONAL LOGIC
 # ---------------------------------------------------------------------
 class ComplianceAndFulfillmentAgent:
-    def __init__(self, user_policy: dict, mongo_uri: str = None):
+    def __init__(self, user_policy: dict, mongo_uri: str = None, sender_details: dict = None):
         self.user_policy = user_policy
+        self.sender_details = sender_details or {}
         if mongo_uri is None:
             mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
         _client = pymongo.MongoClient(mongo_uri)
-        self.db = _client.supply_chain_db
+        self.db = _client.supply_chain
         self.collection = self.db.suppliers
+        self.policies_collection = self.db.policies
         self.email_helper = EmailHelper()
 
     def get_supplier_email(self, s_id: str) -> str:
@@ -117,7 +119,7 @@ class ComplianceAndFulfillmentAgent:
         - Acceptable Damaged Goods Liability Options: {self.user_policy['acceptable_liability_parties']}
         
         Vendor's Active Policy:
-        {json.dumps(vendor_policies, indent=2)}
+        {json.dumps(vendor_policies, indent=2, default=str)}
         
         Flag any value that violates or provides worse coverage terms than our rules.
         """
@@ -242,12 +244,24 @@ class ComplianceAndFulfillmentAgent:
         if finalized_supplier_id:
             UI.section("Finalizing Deals and Dispatching Notices")
             
+            print(f"\n{UI.BOLD}{UI.BLUE}🔹 Please provide Purchase Order details for the deal acceptance email:{UI.ENDC}")
+            po_number = input("  Purchase Order Number: ").strip()
+            po_date = input("  Date of Purchase: ").strip()
+            shipping_address = input("  Shipping Address: ").strip()
+            
+            po_details = {
+                "po_number": po_number,
+                "po_date": po_date,
+                "shipping_address": shipping_address,
+                "quote": finalized_quote
+            }
+            
             # Send Deal Acceptance
             if finalized_quote.get("is_combination"):
                 for comp in finalized_quote["component_quotes"]:
-                    self.send_deal_acceptance(comp["supplier_id"], comp["supplier_name"])
+                    self.send_deal_acceptance(comp["supplier_id"], comp["supplier_name"], po_details)
             else:
-                self.send_deal_acceptance(finalized_supplier_id, finalized_supplier_name)
+                self.send_deal_acceptance(finalized_supplier_id, finalized_supplier_name, po_details)
                 
             # Send Rejection to others
             for rank_item in ranked_suppliers:
@@ -260,19 +274,52 @@ class ComplianceAndFulfillmentAgent:
             UI.warning("Exhausted all ranked suppliers. No deal finalized.")
             return False
 
-    def send_deal_acceptance(self, s_id: str, name: str):
-        prompt = f"Write an automated brief purchase validation confirmation email to {name} declaring contract forms accepted and instructing logistics departure runs to begin."
-        body = self.call_groq(prompt)
-        s_email = self.get_supplier_email(s_id)
-        subject = f"Contract Accepted - Begin Logistics ({s_id})"
-        UI.print_email("OUTBOUND TO", name, subject, body)
-        self.email_helper.send_email(s_email, subject, body)
+    def send_deal_acceptance(self, s_id: str, name: str = "", po_details: dict = None):
+        supplier = self.collection.find_one({"id": s_id}) or {}
+        supplier_name = supplier.get("name", name)
+        supplier_email = supplier.get("email", "unknown@example.com")
+        
+        po_details = po_details or {}
+        quote = po_details.get("quote", {})
+        
+        items_str = ""
+        if quote.get("is_combination"):
+            comp_quote = next((c for c in quote.get("component_quotes", []) if c["supplier_id"] == s_id), {})
+            qtys = comp_quote.get("confirmed_taken_items", {})
+            for item, qty in qtys.items():
+                items_str += f"\n- {item}: {qty} units"
+        else:
+            qtys = quote.get("quoted_quantities", {})
+            for item, qty in qtys.items():
+                items_str += f"\n- {item}: {qty} units"
 
-    def send_rejection_notice(self, s_id: str, s_name: str):
-        reject_prompt = f"Draft a short, polite, and professional procurement cancellation note to {s_name} stating that we have decided to go with another vendor for this order, but we appreciate their quote."
+        sender_info = f"""
+        Name: {self.sender_details.get('name', '[Your Name]')}
+        Title: {self.sender_details.get('title', '[Your Title]')}
+        Company: {self.sender_details.get('company', '[Your Company Name]')}
+        Contact: {self.sender_details.get('phone', '')} | {self.sender_details.get('email', '')}
+        """
+        
+        po_info = f"""
+        Purchase Order Number: {po_details.get('po_number', '[PO Number]')}
+        Date of Purchase: {po_details.get('po_date', '[Date]')}
+        Shipping Address: {po_details.get('shipping_address', '[Shipping Address]')}
+        Items Purchased and Quantities: {items_str}
+        """
+        
+        prompt = f"Write an automated brief purchase validation confirmation email to {supplier_name} declaring contract forms accepted and instructing logistics departure runs to begin.\n\nMake sure to explicitly include these exact details in the email without any placeholders:\n{po_info}\n\nAnd use this for the email signature exactly:\n{sender_info}"
+        
+        body = self.call_groq(prompt)
+        subject = f"Contract Accepted - Begin Logistics (PO: {po_details.get('po_number', s_id)})"
+        self.email_helper.send_email(supplier_email, subject, body)
+
+    def send_rejection_notice(self, s_id: str, s_name: str = ""):
+        supplier = self.collection.find_one({"id": s_id}) or {}
+        supplier_name = supplier.get("name", s_name)
+        supplier_email = supplier.get("email", "unknown@example.com")
+        
+        reject_prompt = f"Draft a short, polite, and professional procurement cancellation note to {supplier_name} stating that we have decided to go with another vendor for this order, but we appreciate their quote."
         rejection_msg = self.call_groq(reject_prompt)
-        s_email = self.get_supplier_email(s_id)
         subject = f"Update on Request for Quotation ({s_id})"
-        UI.print_email("OUTBOUND TO", s_name, subject, rejection_msg)
-        self.email_helper.send_email(s_email, subject, rejection_msg)
+        self.email_helper.send_email(supplier_email, subject, rejection_msg)
 
