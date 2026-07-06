@@ -36,27 +36,27 @@ class UI:
 
     @staticmethod
     def step(title: str):
-        print(f"\n{UI.BOLD}{UI.BLUE}🔹 {title}{UI.ENDC}", flush=True)
+        print(f"\n{UI.BOLD}{UI.BLUE}-> {title}{UI.ENDC}", flush=True)
         print(f"{UI.BLUE}{'-'*50}{UI.ENDC}", flush=True)
 
     @staticmethod
     def log(msg: str):
-        print(f"  ⚙️ [System]: {msg}", flush=True)
+        print(f"  [*] [System]: {msg}", flush=True)
 
     @staticmethod
     def warning(msg: str):
-        print(f"  ⚠️ {UI.WARNING}{msg}{UI.ENDC}")
+        print(f"  [WARN] {UI.WARNING}{msg}{UI.ENDC}")
 
     @staticmethod
     def success(msg: str):
-        print(f"  ✅ {UI.GREEN}{msg}{UI.ENDC}")
+        print(f"  [OK] {UI.GREEN}{msg}{UI.ENDC}")
 
     @staticmethod
     def print_email(direction: str, name: str, subject: str, body: str):
         color = UI.WARNING if direction == "OUTBOUND" else UI.BLUE
-        print(f"\n  📨 {UI.BOLD}{direction} EMAIL - {name}{UI.ENDC}")
-        print(f"  ├─ {UI.BOLD}Subject:{UI.ENDC} {color}{subject}{UI.ENDC}")
-        print(f"  └─ {UI.BOLD}Email Content:{UI.ENDC}\n  \"\"\"\n  {body.strip()}\n  \"\"\"")
+        print(f"\n  [EMAIL] {UI.BOLD}{direction} EMAIL - {name}{UI.ENDC}")
+        print(f"  |- {UI.BOLD}Subject:{UI.ENDC} {color}{subject}{UI.ENDC}")
+        print(f"  |- {UI.BOLD}Email Content:{UI.ENDC}\n  \"\"\"\n  {body.strip()}\n  \"\"\"")
 
 # ---------------------------------------------------------------------
 # PYDANTIC STRUCTURES FOR STABLE OUTPUT PACKAGES
@@ -155,15 +155,15 @@ class CompleteSuppliersManagerAgent:
             if sender_details:
                 signature = f"\n\nPlease use the following details for the email signature:\nName: {sender_details.get('name')}\nTitle: {sender_details.get('title')}\nCompany: {sender_details.get('company')}\nAddress: {sender_details.get('address')}\nPhone: {sender_details.get('phone')}\nEmail: {sender_details.get('email')}"
 
-            print(f"  {UI.BLUE}⚙️ Drafting RFQ via LLM for {s_name}... (this may take a few seconds){UI.ENDC}", flush=True)
+            print(f"  {UI.BLUE}[*] Drafting RFQ via LLM for {s_name}... (this may take a few seconds){UI.ENDC}", flush=True)
             
             prompt = f"Draft a professional, clear RFQ email to wholesale vendor '{s_name}' asking for a price and shipping delivery date commitment on:\n{items_string}\nAlso explicitly request that they include their company's return and liability policy details in their response.{signature}"
             email_text = self.call_groq(prompt)
             subject = f"RFQ: Urgent Procurement Order Request ({s_id})"
             
-            print(f"\n  📨 {UI.BOLD}OUTBOUND EMAIL - {s_name}{UI.ENDC}", flush=True)
-            print(f"  ├─ {UI.BOLD}Subject:{UI.ENDC} {UI.WARNING}{subject}{UI.ENDC}", flush=True)
-            print(f"  └─ {UI.BOLD}Status:{UI.ENDC} Sending directly to {s_email} (content hidden)...", flush=True)
+            print(f"\n  [EMAIL] {UI.BOLD}OUTBOUND EMAIL - {s_name}{UI.ENDC}", flush=True)
+            print(f"  |- {UI.BOLD}Subject:{UI.ENDC} {UI.WARNING}{subject}{UI.ENDC}", flush=True)
+            print(f"  |- {UI.BOLD}Status:{UI.ENDC} Sending directly to {s_email} (content hidden)...", flush=True)
             
             self.email_helper.send_email(s_email, subject, email_text)
             contacted_suppliers.append({
@@ -175,32 +175,12 @@ class CompleteSuppliersManagerAgent:
             })
         return contacted_suppliers
 
-    def fetch_inbound_quotes_for_category(self, category: str, contacted_suppliers: List[dict]) -> List[dict]:
-        UI.step(f"Fetching Emails for Category '{category.upper()}'")
+    def check_inbound_replies(self, contacted_suppliers: List[dict]) -> dict:
         contacted_emails = [s["email"] for s in contacted_suppliers]
-        
-        while True:
-            replies = self.email_helper.fetch_recent_replies(contacted_emails)
-            category_replies = {e: replies[e] for e in contacted_emails if e in replies}
-            
-            total_contacted = len(contacted_emails)
-            total_replied = len(category_replies)
-            
-            print(f"\n{UI.BOLD}⏳ Quotes Received for {category}: {total_replied} / {total_contacted}{UI.ENDC}")
-            print("  [ENTER] Manual Refresh (Check top 10 emails now)")
-            print("  [W] Wait 30 minutes before checking automatically")
-            print("  [S] Stop waiting for this category and evaluate received quotes")
-            
-            action = input("  Choose an action: ").strip().lower()
-            
-            if action == 's':
-                break
-            elif action == 'w':
-                print("  (Simulating wait...)")
-                continue
-            else:
-                print("  Fetching top 10 recent emails...")
+        replies = self.email_helper.fetch_recent_replies(contacted_emails)
+        return {e: replies[e] for e in contacted_emails if e in replies}
 
+    def process_inbound_quotes(self, category: str, contacted_suppliers: List[dict], category_replies: dict) -> List[dict]:
         received_quotes = []
         for s in contacted_suppliers:
             s_id = s["id"]
@@ -209,8 +189,8 @@ class CompleteSuppliersManagerAgent:
             if s_email in category_replies:
                 reply_email_text = category_replies[s_email]
                 
-                print(f"\n  📨 {UI.BOLD}INBOUND EMAIL - {s_name}{UI.ENDC}")
-                print(f"  └─ {UI.BOLD}Status:{UI.ENDC} Processing response via LLM (content hidden)...")
+                print(f"\n  [EMAIL] {UI.BOLD}INBOUND EMAIL - {s_name}{UI.ENDC}")
+                print(f"  |- {UI.BOLD}Status:{UI.ENDC} Processing response via LLM (content hidden)...")
                 
                 extract_prompt = f"""
                 Extract the total quoted amount (as a float) and the estimated delivery date (as a YYYY-MM-DD string) from this email reply.
@@ -334,8 +314,8 @@ class CompleteSuppliersManagerAgent:
                     
             if not remaining_needs:
                 combo_names = " & ".join([q["supplier_name"] for q in selected_quotes])
-                print(f"  {UI.BLUE}⚙️ Found a valid combination: {combo_names}{UI.ENDC}")
-                print(f"  ⚙️ Grouping into a combo quote and passing to Agent 3 for compliance and final acceptance...")
+                print(f"  {UI.BLUE}[*] Found a valid combination: {combo_names}{UI.ENDC}")
+                print(f"  [*] Grouping into a combo quote and passing to Agent 3 for compliance and final acceptance...")
                 
                 combo_quote = {
                     "supplier_id": "COMBO_" + "_".join([q["supplier_id"] for q in selected_quotes]),
@@ -409,7 +389,7 @@ class CompleteSuppliersManagerAgent:
             winner_name = quotes[0]["supplier_name"] if quotes else "unknown"
             evaluation_data = {"ranked_suppliers": [{"supplier_id": winner_id, "supplier_name": winner_name, "rank": 1}]}
         
-        print(f"  🥇 Ranked Best Option: {UI.GREEN}{UI.BOLD}{winner_name} ({winner_id}){UI.ENDC}")
+        print(f"  [1ST] Ranked Best Option: {UI.GREEN}{UI.BOLD}{winner_name} ({winner_id}){UI.ENDC}")
         
         UI.step(f"Step 4: Pulling Terms & Compliance Policies From Best Vendor ({winner_name})")
         

@@ -42,7 +42,7 @@ def run_pipeline():
     agent1_payload["products"] = agent1_payload.pop("replenishments")
 
     # User Input for Email Signature (Agent 2)
-    print(f"\n{UI.BOLD}{UI.BLUE}🔹 Please provide your details for the email signature:{UI.ENDC}")
+    print(f"\n{UI.BOLD}{UI.BLUE}[*] Please provide your details for the email signature:{UI.ENDC}")
     sender_details = {
         "company": input("  Company Name: ").strip(),
         "address": input("  Company Address: ").strip(),
@@ -63,7 +63,7 @@ def run_pipeline():
         return
 
     # User Input for Target Compliance Policies (Ask once upfront)
-    print(f"\n{UI.BOLD}{UI.BLUE}🔹 Please provide your target compliance policies:{UI.ENDC}")
+    print(f"\n{UI.BOLD}{UI.BLUE}[*] Please provide your target compliance policies:{UI.ENDC}")
     try:
         fee_input = input("  Max Advance Payment Percentage (e.g., 0.50 for 50%): ").strip()
         fee = float(fee_input) if fee_input else 0.50

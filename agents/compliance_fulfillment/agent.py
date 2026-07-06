@@ -39,27 +39,27 @@ class UI:
 
     @staticmethod
     def step(title: str):
-        print(f"\n{UI.BOLD}{UI.BLUE}🔹 {title}{UI.ENDC}")
+        print(f"\n{UI.BOLD}{UI.BLUE}-> {title}{UI.ENDC}")
         print(f"{UI.BLUE}{'-'*50}{UI.ENDC}")
 
     @staticmethod
     def log(msg: str):
-        print(f"  ⚙️ [System]: {msg}")
+        print(f"  [*] [System]: {msg}")
 
     @staticmethod
     def warning(msg: str):
-        print(f"  ⚠️ {UI.WARNING}{msg}{UI.ENDC}")
+        print(f"  [WARN] {UI.WARNING}{msg}{UI.ENDC}")
 
     @staticmethod
     def success(msg: str):
-        print(f"  ✅ {UI.GREEN}{msg}{UI.ENDC}")
+        print(f"  [OK] {UI.GREEN}{msg}{UI.ENDC}")
 
     @staticmethod
     def print_email(direction: str, name: str, subject: str, body: str):
         color = UI.WARNING if direction == "OUTBOUND TO" else UI.BLUE
-        print(f"\n  📨 {UI.BOLD}{direction} {name.upper()}{UI.ENDC}")
-        print(f"  ├─ {UI.BOLD}Subject:{UI.ENDC} {subject}")
-        print(f"  └─ {UI.BOLD}Body Content:{UI.ENDC}\n  \"\"\"\n  {body.strip()}\n  \"\"\"")
+        print(f"\n  [EMAIL] {UI.BOLD}{direction} {name.upper()}{UI.ENDC}")
+        print(f"  |- {UI.BOLD}Subject:{UI.ENDC} {subject}")
+        print(f"  |- {UI.BOLD}Body Content:{UI.ENDC}\n  \"\"\"\n  {body.strip()}\n  \"\"\"")
 
 # ---------------------------------------------------------------------
 # DATA CAPTURE SCHEMAS
@@ -126,6 +126,59 @@ class ComplianceAndFulfillmentAgent:
         raw_analysis = self.call_groq(prompt, response_schema=ConflictAnalysis)
         return json.loads(raw_analysis)
 
+    def evaluate_supplier(self, s_id: str, s_name: str, supplier_quote: dict):
+        is_combo = supplier_quote.get("is_combination", False)
+        policies_list = []
+        if is_combo:
+            for comp in supplier_quote.get("component_quotes", []):
+                policy_doc = self.policies_collection.find_one({"supplier_id": comp["supplier_id"]})
+                if policy_doc:
+                    policies_list.append(policy_doc)
+        else:
+            policy_doc = self.policies_collection.find_one({"supplier_id": s_id})
+            if policy_doc:
+                policies_list.append(policy_doc)
+        
+        for policy in policies_list:
+            comp_name = policy.get("supplier_name", s_name)
+            comp_id = policy.get("supplier_id", s_id)
+            analysis = self.analyze_conflicts(comp_name, policy)
+            if analysis["has_conflict"]:
+                return analysis, comp_name, comp_id
+                
+        return None, None, None
+
+    def send_counter_offer(self, failed_id: str, failed_name: str, changes_needed: str):
+        neg_prompt = f"Compose a polite, highly concise business message to {failed_name} requesting the following specific adjustments to their policies: '{changes_needed}'. Also mention we cannot proceed unless these are met."
+        counter_offer = self.call_groq(neg_prompt)
+        s_email = self.get_supplier_email(failed_id)
+        subject = f"Procurement Compliance Terms Alignment Validation ({failed_id})"
+        UI.print_email("OUTBOUND TO", failed_name, subject, counter_offer)
+        self.email_helper.send_email(s_email, subject, counter_offer)
+        return s_email
+
+    def wait_for_counter_reply(self, s_email: str, failed_id: str):
+        vendor_reply = self.email_helper.wait_for_reply(s_email, [failed_id], timeout_seconds=180)
+        return vendor_reply
+
+    def finalize_supplier(self, finalized_supplier_id, finalized_supplier_name, finalized_quote, po_details, ranked_suppliers):
+        UI.section("Finalizing Deals and Dispatching Notices")
+        
+        # Send Deal Acceptance
+        if finalized_quote.get("is_combination"):
+            for comp in finalized_quote["component_quotes"]:
+                self.send_deal_acceptance(comp["supplier_id"], comp["supplier_name"], po_details)
+        else:
+            self.send_deal_acceptance(finalized_supplier_id, finalized_supplier_name, po_details)
+            
+        # Send Rejection to others
+        for rank_item in ranked_suppliers:
+            if rank_item["supplier_id"] != finalized_supplier_id:
+                self.send_rejection_notice(rank_item["supplier_id"], rank_item["supplier_name"])
+        
+        UI.success("All supplier communication finalized.")
+        return True
+
     def process_negotiation_pipeline(self, category_group: str, report_block: dict, quotes: List[dict]) -> bool:
         ranked_suppliers = report_block["ranked_supplier_list"]
         
@@ -137,44 +190,17 @@ class ComplianceAndFulfillmentAgent:
             s_id = rank_item["supplier_id"]
             s_name = rank_item["supplier_name"]
             
-            # Find the full quote from the quotes list
             supplier_quote = next((q for q in quotes if q["supplier_id"] == s_id), None)
             if not supplier_quote:
                 continue
                 
-            is_combo = supplier_quote.get("is_combination", False)
-            
             UI.section(f"Compliance Evaluation Segment: Rank {rank_item['rank']} - {s_name} ({category_group})")
             
-            # Reconstruct the policies list to check
-            policies_list = []
-            if is_combo:
-                for comp in supplier_quote["component_quotes"]:
-                    policy_doc = self.policies_collection.find_one({"supplier_id": comp["supplier_id"]})
-                    if policy_doc:
-                        policies_list.append(policy_doc)
-            else:
-                policy_doc = self.policies_collection.find_one({"supplier_id": s_id})
-                if policy_doc:
-                    policies_list.append(policy_doc)
-            
-            failed_analysis = None
-            failed_name = s_name
-            failed_id = s_id
-            
-            for policy in policies_list:
-                comp_name = policy.get("supplier_name", s_name)
-                comp_id = policy.get("supplier_id", s_id)
-                analysis = self.analyze_conflicts(comp_name, policy)
-                if analysis["has_conflict"]:
-                    failed_analysis = analysis
-                    failed_name = comp_name
-                    failed_id = comp_id
-                    break
+            failed_analysis, failed_name, failed_id = self.evaluate_supplier(s_id, s_name, supplier_quote)
                     
             if not failed_analysis:
                 UI.success(f"No contract term anomalies flagged for {s_name}.")
-                print(f"\n📋 {UI.BOLD}OPTIONS FOR {s_name.upper()}:{UI.ENDC}")
+                print(f"\n[MENU] {UI.BOLD}OPTIONS FOR {s_name.upper()}:{UI.ENDC}")
                 print("  [1] OK to continue and Finalize with this supplier")
                 print("  [2] Find others from the rank list (Skip to next)")
                 
@@ -192,7 +218,7 @@ class ComplianceAndFulfillmentAgent:
                 print(f"     Reasoning: {failed_analysis['conflict_reasoning']}")
                 print(f"     Flagged Discrepancies: {failed_analysis['flagged_fields']}")
                 
-                print(f"\n📋 {UI.BOLD}OPTIONS FOR {failed_name.upper()}:{UI.ENDC}")
+                print(f"\n[MENU] {UI.BOLD}OPTIONS FOR {failed_name.upper()}:{UI.ENDC}")
                 print("  [1] OK with this to proceed anyway (Waive requirements)")
                 print("  [2] Make changes in the supplier's policy (Negotiate)")
                 print("  [3] Change the supplier (Skip to next rank)")
@@ -205,18 +231,11 @@ class ComplianceAndFulfillmentAgent:
                     finalized_quote = supplier_quote
                     break
                 elif choice == "2":
-                    changes_needed = input("\n✍️ Enter the changes needed in their policy: ").strip()
-                    
-                    neg_prompt = f"Compose a polite, highly concise business message to {failed_name} requesting the following specific adjustments to their policies: '{changes_needed}'. Also mention we cannot proceed unless these are met."
-                    counter_offer = self.call_groq(neg_prompt)
-                    
-                    s_email = self.get_supplier_email(failed_id)
-                    subject = f"Procurement Compliance Terms Alignment Validation ({failed_id})"
-                    UI.print_email("OUTBOUND TO", failed_name, subject, counter_offer)
-                    self.email_helper.send_email(s_email, subject, counter_offer)
+                    changes_needed = input("\n[INPUT] Enter the changes needed in their policy: ").strip()
+                    s_email = self.send_counter_offer(failed_id, failed_name, changes_needed)
                     
                     UI.step(f"Waiting for Real Response from {failed_name}")
-                    vendor_reply = self.email_helper.wait_for_reply(s_email, [failed_id], timeout_seconds=180)
+                    vendor_reply = self.wait_for_counter_reply(s_email, failed_id)
                     
                     if not vendor_reply:
                         UI.warning(f"No response from {failed_name}. Skipping to next rank.")
@@ -225,7 +244,7 @@ class ComplianceAndFulfillmentAgent:
                         vendor_reply_text = vendor_reply.get("body", "")
                         UI.print_email("INBOUND FROM", failed_name, vendor_reply.get("subject", "RE:"), vendor_reply_text)
                         
-                        print(f"\n📋 {UI.BOLD}Did they agree?{UI.ENDC}")
+                        print(f"\n[MENU] {UI.BOLD}Did they agree?{UI.ENDC}")
                         print("  [1] Yes, Finalize with them")
                         print("  [2] No, Reject and move to next rank")
                         sub_choice = input("  Enter choice [1-2]: ").strip()
@@ -242,9 +261,7 @@ class ComplianceAndFulfillmentAgent:
                     continue
                     
         if finalized_supplier_id:
-            UI.section("Finalizing Deals and Dispatching Notices")
-            
-            print(f"\n{UI.BOLD}{UI.BLUE}🔹 Please provide Purchase Order details for the deal acceptance email:{UI.ENDC}")
+            print(f"\n{UI.BOLD}{UI.BLUE}-> Please provide Purchase Order details for the deal acceptance email:{UI.ENDC}")
             po_number = input("  Purchase Order Number: ").strip()
             po_date = input("  Date of Purchase: ").strip()
             shipping_address = input("  Shipping Address: ").strip()
@@ -255,21 +272,7 @@ class ComplianceAndFulfillmentAgent:
                 "shipping_address": shipping_address,
                 "quote": finalized_quote
             }
-            
-            # Send Deal Acceptance
-            if finalized_quote.get("is_combination"):
-                for comp in finalized_quote["component_quotes"]:
-                    self.send_deal_acceptance(comp["supplier_id"], comp["supplier_name"], po_details)
-            else:
-                self.send_deal_acceptance(finalized_supplier_id, finalized_supplier_name, po_details)
-                
-            # Send Rejection to others
-            for rank_item in ranked_suppliers:
-                if rank_item["supplier_id"] != finalized_supplier_id:
-                    self.send_rejection_notice(rank_item["supplier_id"], rank_item["supplier_name"])
-                    
-            UI.success("All supplier communication finalized.")
-            return True
+            return self.finalize_supplier(finalized_supplier_id, finalized_supplier_name, finalized_quote, po_details, ranked_suppliers)
         else:
             UI.warning("Exhausted all ranked suppliers. No deal finalized.")
             return False

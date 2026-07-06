@@ -51,7 +51,7 @@ class EmailHelper:
             print(f"Skipping IMAP check for {from_address} (missing credentials).")
             return ""
 
-        print(f"  ⏳ Waiting for reply from {from_address} (timeout in {timeout_seconds}s)...")
+        print(f"  [*] Waiting for reply from {from_address} (timeout in {timeout_seconds}s)...")
         end_time = time.time() + timeout_seconds
         
         while time.time() < end_time:
@@ -97,7 +97,7 @@ class EmailHelper:
                 
             time.sleep(poll_interval)
             
-        print(f"  ❌ Timeout waiting for reply from {from_address}")
+        print(f"  [X] Timeout waiting for reply from {from_address}")
         return ""
 
     def fetch_recent_replies(self, expected_senders: list, limit: int = 10) -> dict:
